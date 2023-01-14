@@ -9,7 +9,7 @@ import (
 )
 
 type Xgo interface {
-	Run(func(), ...Option)
+	Run(func(), ...runOptions)
 	Wait()
 	Cancel()
 	IsDone() bool
@@ -18,77 +18,73 @@ type Xgo interface {
 }
 
 type goroutiner struct {
-	waitGroup *sync.WaitGroup    // 内部的等待组
-	parentCtx context.Context    // 外层传来的ctx，可以是一个带截至时间的ctx
-	ctx       context.Context    // 内部的ctx
-	cancel    context.CancelFunc // 内部的取消函数
-	err       error              // 判断优先级高到低，第一个触发的panic，ctx取消，父ctx取消
-	closed    int32              // 如果其中一个goroutine或者阻塞函数触发了panic，我们都会关闭整个组
-	blockchan chan struct{}      // 当前阻塞的信号通知
-	blocked   int32              // 当前的阻塞状态
+	waitGroup     *sync.WaitGroup    // 内部的等待组
+	ctx           context.Context    // 内部的ctx，内部会把上层的ctx包装一下，目的是为了拿到一个cancel函数
+	cancel        context.CancelFunc // 内部的取消函数
+	err           error              // 判断优先级高到低，第一个触发的panic，ctx取消，父ctx取消
+	closed        int32              // 如果其中一个goroutine或者阻塞函数触发了panic，我们都会关闭整个组
+	blockchan     chan struct{}      // 当前阻塞的信号通知
+	blocked       int32              // 当前的阻塞状态
+	unlimited     int32
+	unlimitedChan chan struct{}
 }
 
-// New 初始化一个 goroutine 组
-func New(ctx context.Context) Xgo {
-	nctx, cancel := context.WithCancel(ctx)
-	return &goroutiner{
-		waitGroup: &sync.WaitGroup{},
-		parentCtx: ctx,
-		ctx:       nctx,
-		cancel:    cancel,
+func New(o ...options) Xgo {
+	g := new(goroutiner)
+	g.waitGroup = new(sync.WaitGroup)
+	g.unlimited = 0
+	g.unlimitedChan = make(chan struct{})
+	close(g.unlimitedChan)
+	for _, v := range o {
+		v(g)
 	}
+	if g.ctx == nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		g.ctx = ctx
+		g.cancel = cancel
+	}
+	return g
 }
 
-// runConfig 运行一个 goroutine 时可以传这些参数
-type runConfig struct {
-	goroutineName string
-	concurrentNum int
-	clearup       []func()
-}
-
-type Option func(g *runConfig)
-
-func WithGoroutineName(name string) Option {
-	return func(g *runConfig) {
-		g.goroutineName = name
-	}
-}
-
-func WithConcurrentNum(num int) Option {
-	return func(g *runConfig) {
-		g.concurrentNum = num
-	}
-}
-
-func WithClearup(f func()) Option {
-	return func(g *runConfig) {
-		g.clearup = append(g.clearup, f)
-	}
-}
-
-func (g *goroutiner) Run(f func(), options ...Option) {
-	runConfig := new(runConfig)
-	for i := 0; i < len(options); i++ {
-		options[i](runConfig)
-	}
-	n := "unknow"
-	if len(runConfig.goroutineName) != 0 {
-		n = runConfig.goroutineName
-	}
-	num := 1
-	if runConfig.concurrentNum > 1 {
-		num = runConfig.concurrentNum
+func (g *goroutiner) Run(f func(), options ...runOptions) {
+	run := execRunOptions(options...)
+	name := run.goroutineName
+	concurrentNum := run.concurrentNum
+	limiter := run.limiter
+	if limiter != nil {
+		if atomic.AddInt32(&g.unlimited, 1) == 1 {
+			g.unlimitedChan = make(chan struct{})
+		}
 	}
 	wg := &sync.WaitGroup{}
-	wg.Add(num)
-	g.waitGroup.Add(num)
-	for i := 0; i < num; i++ {
+	for i := 0; ; i++ {
+		if limiter == nil {
+			if i >= concurrentNum {
+				break
+			}
+		} else {
+			if !limiter.Wait() {
+				if atomic.AddInt32(&g.unlimited, -1) == 0 {
+					close(g.unlimitedChan)
+				}
+				break
+			}
+			if g.IsDone() {
+				atomic.StoreInt32(&g.unlimited, 0)
+				close(g.unlimitedChan)
+				break
+			}
+		}
+		wg.Add(1)
+		g.waitGroup.Add(1)
 		go func() {
 			defer func() {
 				if err := recover(); err != nil {
 					if atomic.CompareAndSwapInt32(&(g.closed), 0, 1) {
 						g.Cancel()
-						g.err = fmt.Errorf("%s: %v", n, err)
+						g.err = fmt.Errorf("%s: %v", name, err)
+					} else {
+						panic("内部执行异常")
 					}
 				}
 				g.waitGroup.Done()
@@ -103,18 +99,22 @@ func (g *goroutiner) Run(f func(), options ...Option) {
 			if err := recover(); err != nil {
 				if atomic.CompareAndSwapInt32(&(g.closed), 0, 1) {
 					g.Cancel()
-					g.err = fmt.Errorf("%s: %v", n, err)
+					g.err = fmt.Errorf("%s: %v", name, err)
+				} else {
+					panic("内部执行异常")
 				}
 			}
 		}()
-		for i := 0; i < len(runConfig.clearup); i++ {
-			runConfig.clearup[i]()
+		for i := 0; i < len(run.clearup); i++ {
+			run.clearup[i]()
 		}
 	}()
 }
 
 func (g *goroutiner) Wait() {
-	g.waitGroup.Wait()
+	if _, ok := <-g.unlimitedChan; !ok {
+		g.waitGroup.Wait()
+	}
 }
 
 func (g *goroutiner) Cancel() {
@@ -143,8 +143,6 @@ func (g *goroutiner) IsDone() bool {
 func (g *goroutiner) Error() error {
 	if g.err != nil {
 		return g.err
-	} else if g.parentCtx.Err() != nil {
-		return g.parentCtx.Err()
 	} else {
 		return g.ctx.Err()
 	}
@@ -171,10 +169,12 @@ func (g *goroutiner) Block(fn func()) error {
 					if atomic.CompareAndSwapInt32(&(g.closed), 0, 1) {
 						g.Cancel()
 						g.err = fmt.Errorf("%v", err)
+					} else {
+						panic("内部执行异常")
 					}
 				}
 				if !atomic.CompareAndSwapInt32(&g.blocked, 1, 0) {
-					panic("阻塞解除失败，按预期到这里阻塞应该还在持续，但阻塞已经被摘除，内部错误")
+					panic("内部执行异常")
 				}
 				close(g.blockchan)
 			}()

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"time"
 
@@ -10,8 +9,7 @@ import (
 
 // 在 demo1 的基础上增加了panic
 func main() {
-	ctx, _ := context.WithTimeout(context.Background(), time.Second*3)
-	x := xgo.New(ctx)
+	x := xgo.New(xgo.WithTimeout(time.Second * 3))
 	x.Run(func() {
 		for i := 0; i < 100000; i++ {
 			if i == 1 {
@@ -23,7 +21,7 @@ func main() {
 				return
 			}
 		}
-	})
+	}, xgo.RunWithName("go"))
 
 	x.Wait()
 	if err := x.Error(); err != nil {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"time"
 
@@ -10,8 +9,8 @@ import (
 
 // 生产者运行一段时间会发生panic，管道也会关闭
 func main() {
-	ctx, _ := context.WithTimeout(context.Background(), time.Second*3)
-	x := xgo.New(ctx)
+	// ctx, _ := context.WithTimeout(context.Background(), time.Second*3)
+	x := xgo.New(xgo.WithTimeout(time.Second * 3))
 	data := make(chan int, 50)
 	x.Run(func() {
 		for i := 0; i < 100000; i++ {
@@ -24,7 +23,7 @@ func main() {
 				return
 			}
 		}
-	}, xgo.WithGoroutineName("producer"), xgo.WithConcurrentNum(10), xgo.WithClearup(func() {
+	}, xgo.RunWithName("producer"), xgo.RunWithNum(10), xgo.RunWithClearup(func() {
 		log.Printf("close chan")
 		close(data)
 	}))
@@ -33,7 +32,7 @@ func main() {
 		for d := range data {
 			log.Printf("consumer %d", d)
 		}
-	}, xgo.WithGoroutineName("consumer"), xgo.WithConcurrentNum(20))
+	}, xgo.RunWithName("consumer"), xgo.RunWithNum(20))
 
 	x.Wait()
 	if err := x.Error(); err != nil {

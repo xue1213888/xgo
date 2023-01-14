@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"time"
 
@@ -9,8 +8,8 @@ import (
 )
 
 func main() {
-	ctx, _ := context.WithTimeout(context.Background(), time.Second*5)
-	x := xgo.New(ctx)
+	// ctx, _ := context.WithTimeout(context.Background(), time.Second*5)
+	x := xgo.New()
 
 	ch := make(chan int, 20)
 	x.Run(func() {
@@ -21,9 +20,9 @@ func main() {
 				return
 			}
 		}
-	}, xgo.WithClearup(func() {
+	}, xgo.RunWithClearup(func() {
 		close(ch)
-	}), xgo.WithConcurrentNum(10))
+	}), xgo.RunWithNum(10))
 
 	x.Run(func() {
 		for v := range ch {
@@ -32,10 +31,10 @@ func main() {
 				return
 			}
 		}
-	}, xgo.WithConcurrentNum(10))
+	}, xgo.RunWithNum(10))
 
 	x.Run(func() {
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 2; i++ {
 			time.Sleep(time.Second * 3)
 			x.Block(func() {
 				time.Sleep(time.Second * 3)

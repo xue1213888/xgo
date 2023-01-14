@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"time"
 
@@ -10,8 +9,8 @@ import (
 
 // 在 demo1 的基础上增加了一次性开启的协程数量，还带了一个协程名，当协程panic的时候外层会通过协程名来打印错误
 func main() {
-	ctx, _ := context.WithTimeout(context.Background(), time.Second*3)
-	x := xgo.New(ctx)
+	// ctx, _ := context.WithTimeout(context.Background(), time.Second*3)
+	x := xgo.New(xgo.WithTimeout(time.Second * 3))
 	x.Run(func() {
 		for i := 0; i < 100000; i++ {
 			log.Printf("%d\n", i)
@@ -20,7 +19,7 @@ func main() {
 				return
 			}
 		}
-	}, xgo.WithGoroutineName("goroutine name"), xgo.WithConcurrentNum(10))
+	}, xgo.RunWithName("goroutine name"), xgo.RunWithNum(10))
 
 	x.Wait()
 	if err := x.Error(); err != nil {
