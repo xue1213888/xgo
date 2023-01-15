@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	x := xgo.New(xgo.WithTimeout(time.Second * 3))
+	x := xgo.New()
 	ch := make(chan int, 10)
 	x.Run(func() {
 		for i := 0; i < 10; i++ {
@@ -17,7 +17,7 @@ func main() {
 			if x.IsDone() {
 				break
 			}
-			time.Sleep(time.Microsecond)
+			time.Sleep(time.Millisecond)
 		}
 	}, xgo.RunWithClearup(func() {
 		close(ch)
@@ -30,7 +30,9 @@ func main() {
 			return
 		}
 		log.Println("recv:", i)
-	}, xgo.RunWithLimiter(xgo.NewSlidingWindowsLimiter(time.Second*2, 2, ch)))
+	}, xgo.RunWithLimiter(xgo.NewSlidingWindowsLimiter(time.Second, 5, xgo.NewLimitUntilChanClosed(ch))),
+		xgo.RunWithMaxGoroutineNum(10))
+
 	x.Wait()
 	if err := x.Error(); err != nil {
 		log.Println(err)

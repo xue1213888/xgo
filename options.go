@@ -32,3 +32,9 @@ func WithTimeout(t time.Duration) options {
 		g.cancel = cancel
 	}
 }
+
+func WithMaxGoroutineNum(cnt int64) options {
+	return func(g *goroutiner) {
+		g.goroutineCap = make(chan struct{}, cnt)
+	}
+}

@@ -6,6 +6,7 @@ type runConfig struct {
 	concurrentNum int      // 这个是当前这个run要启动多少个goroutine
 	clearup       []func() // 这个是当运行结束时需要执行的清理函数，意思整个run结束的defer
 	limiter       Limiter  // 如果里面传了 limiter 我们就需要按照 limiter 限流措施无限开启 goroutine
+	goroutineCap  chan struct{}
 }
 
 type runOptions func(r *runConfig)
@@ -20,6 +21,9 @@ func execRunOptions(o ...runOptions) *runConfig {
 	}
 	if r.concurrentNum == 0 {
 		r.concurrentNum = 1
+	}
+	if r.goroutineCap == nil {
+		r.goroutineCap = make(chan struct{}, 2000)
 	}
 	return r
 }
@@ -46,5 +50,11 @@ func RunWithLimiter(limit Limiter) runOptions {
 func RunWithClearup(f ...func()) runOptions {
 	return func(g *runConfig) {
 		g.clearup = append(g.clearup, f...)
+	}
+}
+
+func RunWithMaxGoroutineNum(cnt int64) runOptions {
+	return func(r *runConfig) {
+		r.goroutineCap = make(chan struct{}, cnt)
 	}
 }

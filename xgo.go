@@ -27,6 +27,8 @@ type goroutiner struct {
 	blocked       int32              // 当前的阻塞状态
 	unlimited     int32
 	unlimitedChan chan struct{}
+
+	goroutineCap chan struct{} // 最大可启动的goroutine数量
 }
 
 func New(o ...options) Xgo {
@@ -34,7 +36,9 @@ func New(o ...options) Xgo {
 	g.waitGroup = new(sync.WaitGroup)
 	g.unlimited = 0
 	g.unlimitedChan = make(chan struct{})
+	g.blockchan = make(chan struct{})
 	close(g.unlimitedChan)
+	close(g.blockchan)
 	for _, v := range o {
 		v(g)
 	}
@@ -42,6 +46,9 @@ func New(o ...options) Xgo {
 		ctx, cancel := context.WithCancel(context.Background())
 		g.ctx = ctx
 		g.cancel = cancel
+	}
+	if g.goroutineCap == nil {
+		g.goroutineCap = make(chan struct{}, 20000)
 	}
 	return g
 }
@@ -62,21 +69,21 @@ func (g *goroutiner) Run(f func(), options ...runOptions) {
 			if i >= concurrentNum {
 				break
 			}
+			if g.IsDone() {
+				break
+			}
 		} else {
-			if !limiter.Wait() {
+			if !limiter.Next() {
 				if atomic.AddInt32(&g.unlimited, -1) == 0 {
 					close(g.unlimitedChan)
 				}
 				break
 			}
-			if g.IsDone() {
-				atomic.StoreInt32(&g.unlimited, 0)
-				close(g.unlimitedChan)
-				break
-			}
 		}
 		wg.Add(1)
 		g.waitGroup.Add(1)
+		g.goroutineCap <- struct{}{}
+		run.goroutineCap <- struct{}{}
 		go func() {
 			defer func() {
 				if err := recover(); err != nil {
@@ -89,6 +96,8 @@ func (g *goroutiner) Run(f func(), options ...runOptions) {
 				}
 				g.waitGroup.Done()
 				wg.Done()
+				<-run.goroutineCap
+				<-g.goroutineCap
 			}()
 			f()
 		}()
@@ -108,12 +117,15 @@ func (g *goroutiner) Run(f func(), options ...runOptions) {
 		for i := 0; i < len(run.clearup); i++ {
 			run.clearup[i]()
 		}
+		close(run.goroutineCap)
 	}()
+
 }
 
 func (g *goroutiner) Wait() {
 	if _, ok := <-g.unlimitedChan; !ok {
 		g.waitGroup.Wait()
+		close(g.goroutineCap)
 	}
 }
 
